@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -36,10 +34,49 @@ func main() {
 		pubsub.Transient,
 	)
 
+	gameState := gamelogic.NewGameState(username)
+
+OuterLoop:
+	for {
+		wordSlice := gamelogic.GetInput()
+		if len(wordSlice) == 0 {
+			continue
+		}
+
+		switch wordSlice[0] {
+		case "spawn":
+			err := gameState.CommandSpawn(wordSlice)
+			if err != nil {
+				log.Printf("error spawning: %v\n", err)
+				log.Fatal(err)
+			}
+		case "move":
+			_, err := gameState.CommandMove(wordSlice)
+			if err != nil {
+				fmt.Printf("error moving: %v\n", err)
+				log.Fatal(err)
+			}
+			fmt.Println("Sucess moving")
+		case "status":
+			gameState.CommandStatus()
+		case "help":
+			gamelogic.PrintClientHelp()
+		case "spam":
+			fmt.Println("Spamming not allowed yet")
+		case "quit":
+			gamelogic.PrintQuit()
+			fmt.Println("Quitting...")
+			break OuterLoop
+		default:
+			fmt.Println("Unknown command")
+		}
+
+	}
+
 	// wait for ctrl+c
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	<-signalChan
-	fmt.Println("Shutting down gracefully...")
+	// signalChan := make(chan os.Signal, 1)
+	// signal.Notify(signalChan, os.Interrupt)
+	// <-signalChan
+	// fmt.Println("Shutting down gracefully...")
 
 }
