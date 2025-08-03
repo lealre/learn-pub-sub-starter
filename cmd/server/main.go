@@ -28,6 +28,13 @@ func main() {
 	}
 	defer channel.Close()
 
+	pubsub.DeclareAndBind(conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		fmt.Sprintf("%s.*", routing.GameLogSlug),
+		pubsub.Durable,
+	)
+
 	gamelogic.PrintServerHelp()
 
 	for {
