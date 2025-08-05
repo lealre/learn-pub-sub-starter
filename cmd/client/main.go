@@ -27,14 +27,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	queueName := fmt.Sprintf("%s.%s", routing.PauseKey, username)
 	pubsub.DeclareAndBind(conn,
 		routing.ExchangePerilDirect,
-		fmt.Sprintf("%s.%s", routing.PauseKey, username),
+		queueName,
 		routing.PauseKey,
 		pubsub.Transient,
 	)
 
 	gameState := gamelogic.NewGameState(username)
+	pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, queueName, routing.PauseKey, pubsub.Transient, handlerPause(gameState))
 
 OuterLoop:
 	for {
@@ -48,13 +50,13 @@ OuterLoop:
 			err := gameState.CommandSpawn(wordSlice)
 			if err != nil {
 				log.Printf("error spawning: %v\n", err)
-				log.Fatal(err)
+				continue
 			}
 		case "move":
 			_, err := gameState.CommandMove(wordSlice)
 			if err != nil {
 				fmt.Printf("error moving: %v\n", err)
-				log.Fatal(err)
+				continue
 			}
 			fmt.Println("Sucess moving")
 		case "status":
@@ -79,4 +81,11 @@ OuterLoop:
 	// <-signalChan
 	// fmt.Println("Shutting down gracefully...")
 
+}
+
+func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
+	return func(ps routing.PlayingState) {
+		defer fmt.Print("> ")
+		gs.HandlePause(ps)
+	}
 }
