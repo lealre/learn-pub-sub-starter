@@ -20,6 +20,11 @@ func main() {
 	defer conn.Close()
 
 	fmt.Println("Starting Peril client...")
+	channel, err := conn.Channel()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer channel.Close()
 
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
@@ -37,6 +42,13 @@ func main() {
 
 	gameState := gamelogic.NewGameState(username)
 	pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, queueName, routing.PauseKey, pubsub.Transient, handlerPause(gameState))
+	pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username),
+		fmt.Sprintf("%s.*", routing.ArmyMovesPrefix),
+		pubsub.Transient,
+		handlerMove(gameState))
 
 OuterLoop:
 	for {
@@ -53,12 +65,23 @@ OuterLoop:
 				continue
 			}
 		case "move":
-			_, err := gameState.CommandMove(wordSlice)
+			move, err := gameState.CommandMove(wordSlice)
 			if err != nil {
 				fmt.Printf("error moving: %v\n", err)
 				continue
 			}
-			fmt.Println("Sucess moving")
+
+			err = pubsub.PublishJSON(
+				channel,
+				routing.ExchangePerilTopic,
+				fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username),
+				move,
+			)
+			if err != nil {
+				fmt.Printf("error publishing message: %v", err)
+				continue
+			}
+			fmt.Println("Success moving")
 		case "status":
 			gameState.CommandStatus()
 		case "help":
@@ -74,18 +97,18 @@ OuterLoop:
 		}
 
 	}
-
-	// wait for ctrl+c
-	// signalChan := make(chan os.Signal, 1)
-	// signal.Notify(signalChan, os.Interrupt)
-	// <-signalChan
-	// fmt.Println("Shutting down gracefully...")
-
 }
 
 func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
 	return func(ps routing.PlayingState) {
 		defer fmt.Print("> ")
 		gs.HandlePause(ps)
+	}
+}
+
+func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove) {
+	return func(move gamelogic.ArmyMove) {
+		defer fmt.Print("> ")
+		gs.HandleMove(move)
 	}
 }
