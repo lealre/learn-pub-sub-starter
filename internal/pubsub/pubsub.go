@@ -4,45 +4,75 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type simpleQueueType string
+type Acktype int
+
+type SimpleQueueType int
 
 const (
-	Durable   simpleQueueType = "duarble"
-	Transient simpleQueueType = "transient"
+	SimpleQueueDurable SimpleQueueType = iota
+	SimpleQueueTransient
 )
-
-type Acktype string
 
 const (
-	Ack         Acktype = "Ack"
-	NackRequeue Acktype = "NackRequeue"
-	NackDiscard Acktype = "NackDiscard"
+	Ack Acktype = iota
+	NackDiscard
+	NackRequeue
 )
 
-func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
-
-	jsonBytes, err := json.Marshal(val)
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType,
+	handler func(T) Acktype,
+) error {
+	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not declare and bind queue: %v", err)
 	}
 
-	ch.PublishWithContext(
-		context.Background(),
-		exchange,
-		key,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        jsonBytes,
-		},
+	msgs, err := ch.Consume(
+		queue.Name, // queue
+		"",         // consumer
+		false,      // auto-ack
+		false,      // exclusive
+		false,      // no-local
+		false,      // no-wait
+		nil,        // args
 	)
+	if err != nil {
+		return fmt.Errorf("could not consume messages: %v", err)
+	}
 
+	unmarshaller := func(data []byte) (T, error) {
+		var target T
+		err := json.Unmarshal(data, &target)
+		return target, err
+	}
+
+	go func() {
+		defer ch.Close()
+		for msg := range msgs {
+			target, err := unmarshaller(msg.Body)
+			if err != nil {
+				fmt.Printf("could not unmarshal message: %v\n", err)
+				continue
+			}
+			switch handler(target) {
+			case Ack:
+				msg.Ack(false)
+			case NackDiscard:
+				msg.Nack(false, false)
+			case NackRequeue:
+				msg.Nack(false, true)
+			}
+		}
+	}()
 	return nil
 }
 
@@ -51,88 +81,47 @@ func DeclareAndBind(
 	exchange,
 	queueName,
 	key string,
-	queueType simpleQueueType, // an enum to represent "durable" or "transient"
+	queueType SimpleQueueType,
 ) (*amqp.Channel, amqp.Queue, error) {
-	channel, err := conn.Channel()
+	ch, err := conn.Channel()
 	if err != nil {
-		return nil, amqp.Queue{}, err
+		return nil, amqp.Queue{}, fmt.Errorf("could not create channel: %v", err)
 	}
 
-	amqoTable := amqp.Table{
-		"x-dead-letter-exchange": "peril_dlx",
-	}
-	queue, err := channel.QueueDeclare(
-		queueName,
-		queueType == Durable,
-		queueType == Transient,
-		queueType == Transient,
-		false,
-		amqoTable,
+	queue, err := ch.QueueDeclare(
+		queueName,                       // name
+		queueType == SimpleQueueDurable, // durable
+		queueType != SimpleQueueDurable, // delete when unused
+		queueType != SimpleQueueDurable, // exclusive
+		false,                           // no-wait
+		amqp.Table{
+			"x-dead-letter-exchange": "peril_dlx",
+		},
 	)
-
 	if err != nil {
-		log.Printf("error declaring queue: %v", err)
-		return nil, amqp.Queue{}, err
+		return nil, amqp.Queue{}, fmt.Errorf("could not declare queue: %v", err)
 	}
 
-	err = channel.QueueBind(
-		queueName,
-		key,
-		exchange,
-		false,
-		nil,
+	err = ch.QueueBind(
+		queue.Name, // queue name
+		key,        // routing key
+		exchange,   // exchange
+		false,      // no-wait
+		nil,        // args
 	)
-
 	if err != nil {
-		log.Printf("error binding queue: %v", err)
-		return nil, amqp.Queue{}, err
+		return nil, amqp.Queue{}, fmt.Errorf("could not bind queue: %v", err)
 	}
-
-	return channel, queue, nil
+	return ch, queue, nil
 }
 
-func SubscribeJSON[T any](
-	conn *amqp.Connection,
-	exchange,
-	queueName,
-	key string,
-	queueType simpleQueueType,
-	handler func(T) Acktype,
-) error {
-
-	chann, _, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	dat, err := json.Marshal(val)
 	if err != nil {
 		return err
 	}
-
-	chanDelivery, err := chann.Consume(queueName, "", false, false, false, false, nil)
-	if err != nil {
-		fmt.Printf("error consuming the queue: %v", err)
-		return err
-	}
-
-	go func() {
-		for msg := range chanDelivery {
-			var body T
-			json.Unmarshal(msg.Body, &body)
-			ack := handler(body)
-
-			if ack == Ack {
-				msg.Ack(false)
-			}
-
-			if ack == NackRequeue {
-				msg.Nack(false, true)
-			}
-
-			if ack == NackDiscard {
-				msg.Nack(false, false)
-			}
-
-			fmt.Printf("Ack type %s\n", ack)
-		}
-	}()
-
-	return nil
-
+	return ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        dat,
+	})
 }
