@@ -2,7 +2,15 @@
 
 This is the starter code used in Boot.dev's [Learn Pub/Sub](https://learn.boot.dev/learn-pub-sub) course.
 
-## Notes
+## Running the code
+
+- Use `./rabbit.sh start/stop/logs` to manage the RabbitMQ container.
+    - After running `./rabbit.sh start`, the RabbitMQ UI will be available at [http://localhost:15672](http://localhost:15672).
+    - The default username and password are `guest` and `guest`.
+- Run `go run cmd/client/main.go` to start the client.
+- Run `go run cmd/server/main.go` to start the server.
+
+## Notes about RabbitMQ
 
 Pub/Sub (publish/subscribe) is a pattern software systems can use to communicate. Are particularly useful when many events are happening in real-time and disparate parts of the system need to react to those events.
 
