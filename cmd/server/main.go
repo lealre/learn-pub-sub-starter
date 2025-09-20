@@ -28,12 +28,17 @@ func main() {
 	}
 	defer channel.Close()
 
-	pubsub.DeclareAndBind(conn,
+	err = pubsub.SubscribeGob(
+		conn,
 		routing.ExchangePerilTopic,
 		routing.GameLogSlug,
-		fmt.Sprintf("%s.*", routing.GameLogSlug),
+		routing.GameLogSlug+".*",
 		pubsub.SimpleQueueDurable,
+		handlerLogs(),
 	)
+	if err != nil {
+		log.Fatalf("could not starting consuming logs: %v", err)
+	}
 
 	gamelogic.PrintServerHelp()
 
