@@ -87,6 +87,16 @@ func subscribe[T any](
 		return fmt.Errorf("could not declare and bind queue: %v", err)
 	}
 
+	// Set prefetch to control message flow
+	err = ch.Qos(
+		10,    // prefetch count - max messages to deliver without ack
+		0,     // prefetch size - 0 means no size limit
+		false, // global - apply to entire connection
+	)
+	if err != nil {
+		return fmt.Errorf("could not set QoS: %v", err)
+	}
+
 	msgs, err := ch.Consume(
 		queue.Name, // queue
 		"",         // consumer

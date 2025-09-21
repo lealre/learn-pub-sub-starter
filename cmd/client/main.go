@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
@@ -113,7 +114,23 @@ OuterLoop:
 		case "help":
 			gamelogic.PrintClientHelp()
 		case "spam":
-			fmt.Println("Spamming not allowed yet")
+			if len(wordSlice) < 2 {
+				fmt.Println("usage: spam <n>")
+				continue
+			}
+			n, err := strconv.Atoi(wordSlice[1])
+			if err != nil {
+				fmt.Printf("error: %s is not a valid number\n", wordSlice[1])
+				continue
+			}
+			for range n {
+				msg := gamelogic.GetMaliciousLog()
+				err = publishGameLog(channel, username, msg)
+				if err != nil {
+					fmt.Printf("error publishing malicious log: %s\n", err)
+				}
+			}
+			fmt.Printf("Published %v malicious logs\n", n)
 		case "quit":
 			gamelogic.PrintQuit()
 			fmt.Println("Quitting...")
