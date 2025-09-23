@@ -126,3 +126,137 @@ comment.deleted
 etc.
 
 This allows you to easily bind queues to all events of a certain type, or all events that affect a certain entity.
+
+**Delivery (Dead Letter Exchanges and Queues)**
+
+In an asynchronous system like RabbitMQ, the sender and receiver are decoupled. The sender doesn't need to know if the message was successfully delivered to the receiver. That has benefits, like simplicity and performance, but it also means that the chance of bugs increases.
+
+To address this, it's common in PubSub systems to aggregate messages that fail to be processed into a dead letter queue. Queues can be configured to send messages that fail to be processed to a dead letter exchange, which then routes the message to a dead letter queue.
+
+> Example of creating a dead letter exchange and queue:
+> 1. Create a new exchange called peril_dlx of type fanout. Use the default settings.
+> 2. Fanout is a good choice because we want all failed messages sent to the exchange to be routed to the queue, without needing to worry about routing keys.
+> 3. Using the UI, create a new queue called peril_dlq.
+> 4. Go to the queue's page and bind the queue to the peril_dlx exchange with no routing key. Leave the default settings
+
+**Ack and Nack**: how a consumer tells the message broker that an individual message succeeded or failed to be processed. When a consumer receives a message, it must acknowledge it.
+
+If the subscriber crashes or fails to process the message, the message broker can just re-queue the message to be processed again, or discard it (perhaps to a dead-letter queue).
+
+There are really 3 options for acknowledging a message:
+
+- Acknowledge: Processed successfully.
+- Nack and requeue: Not processed successfully, but should be requeued on the same queue to be processed again (retry).
+- Nack and discard: Not processed successfully, and should be discarded (to a dead-letter queue if configured or just deleted entirely).
+
+Example of declaring a queue with a dead letter exchange:
+
+```go
+queue, err := ch.QueueDeclare(
+    queueName,                       // name
+    queueType == SimpleQueueDurable, // durable
+    queueType != SimpleQueueDurable, // delete when unused
+    queueType != SimpleQueueDurable, // exclusive
+    false,                           // no-wait
+    amqp.Table{
+        "x-dead-letter-exchange": "peril_dlx",
+    },
+)
+```
+
+**Exact Delivery**: Delivering messages is hard. When you architect a system, you need to decide what guarantees to make. The three main types are:
+
+- At-least-once delivery: If the message broker isn't sure the consumer received the message, it's retried.
+- At-most-once delivery: If the message broker isn't sure the consumer received the message, it's discarded.
+- Exactly-once delivery: The message is guaranteed to be delivered once and only once.
+
+| Type          | Complexity | Efficiency | Reliability |
+| ------------- | ---------- | ---------- | ----------- |
+| At-least-once | Medium     | Medium     | Medium      |
+| At-most-once  | Low        | High       | Low         |
+| Exactly-once  | High       | Low        | High        |
+
+At-least-once: In RabbitMQ, at-least-once delivery is the default. If a consumer fails to process a message, the message broker will just re-queue the message to be processed again. That means that you typically want to write your consumer code in such a way that it can process the same message multiple times without causing problems.
+
+For example, if you have a message that says "Falkor created an account", and your consumer is responsible for sending a verification SMS, you can simply have your consumer check if it already sent an SMS to Falkor in the last 3 minutes before sending another one. That way, even if the message is processed multiple times, only one SMS is sent.
+
+NackRequeue is the default behavior in Rabbit, and it's an example of at-least-once delivery.
+
+At-most-once: At-most-once delivery makes more sense when you're dealing with messages that, frankly, aren't mission-critical. For example, instead of a message that represents a user account, maybe it's just a debug log. At-most-once delivery is more efficient from a performance perspective because it doesn't require the message broker to keep track of which messages have been processed, but obviously, it's less reliable.
+
+Exactly-once: Exactly-once delivery is nearly impossible. That said, there are certainly ways to approximate it to the point of it being reliable from a practical perspective. However, of the three options, exactly-once delivery is the most difficult to implement and the most inefficient (slow).
+
+At-least-once delivery is generally a good "default" choice for most systems.
+
+**Nack Requeue**: As a general rule, you want to split your consumer's errors into two classes:
+
+- Logical errors: Unlikely to be resolved with a retry. For example, a message is malformed JSON, or the ID of a user doesn't exist in the database.
+- Transient errors: Likely to be resolved with a retry. For example, a network timeout, or a database connection error.
+
+If you NackRequeue a message, it will be requeued to the primary queue to be processed again. This can be very bad if the error isn't transient as it will just be reprocessed over and over forever, blocking other messages and incurring large processing costs. Only NackRequeue messages if you're confident a retry will resolve the issue!
+
+**Serialization**
+
+JSON isn't the most efficient way to serialize data, so when you're sending massive amounts of data, you might want to consider a more efficient format.
+
+**Gob**: In Go, the standard library has a package called [encoding/gob](https://pkg.go.dev/encoding/gob) that can be used to serialize and deserialize data. It's more efficient than JSON, but it's not human-readable. It's a binary format that's faster to encode and decode.
+
+**Schema**: We've serialized structs to JSON and Gob, but there are many other possible choices like protocol buffers or Avro. While choosing which serialization format to use is important, it's also important to be careful about the shape or "schema" of the data you're serializing. As a general rule, if you make breaking changes to a schema, make sure you handle backward compatibility.
+
+**Nodes and Clusters**
+
+In production, you'd likely have an entire cluster of nodes. Some advantages of a large cluster include:
+
+- High Availability: If one node goes down, other nodes can take over.
+- Scalability: You're not constrained by the resources of a single machine.
+- Redundancy: If one node goes down, the messages aren't lost.
+
+**Resources**:
+
+- CPU: Faster nodes (more cores, higher clock speed) and more nodes can both help.
+- Memory: More RAM per node and more nodes can both help.
+- Disk: More disk space per node and more nodes can both help.
+- Network Bandwidth: In a cloud setting, bandwidth is usually provisioned in proportion to a node's size.
+
+I've found that using a cluster of 3 nodes is a solid starting point for most production applications, even if you're processing thousands of messages per second. I've also found that when you find your nodes starting to hit limits on CPU, RAM, or Disk, it's generally better to scale vertically first (more powerful nodes) before you go crazy horizontally (larger number of nodes).
+
+More nodes mean more resources, but it also means more management overhead and complexity.
+
+How Do You Know? The overview tab in the RabbitMQ management console is the best place to start. It will show you high-level stats about the resource usage of your cluster.
+
+**Backpressure** is a common problem in Pub/Sub systems. It happens when messages are being published to a queue faster than they can be consumed. This leads to a growing queue size, which can eventually cause the system to run out of memory or disk space.
+
+**Healthy Queues Are Empty**: a full queue is an unhealthy queue because it grows faster than it can be consumed. This is dangerous because it can lead to the system running out of memory or disk space. If Rabbit goes down, your whole system goes down with it. Most of the time a healthy cluster, even if it's processing thousands of messages per second, will have mostly empty queues. You always want to be able to consume messages as fast as they can be published.
+
+**Prefetch**: When you run a consumer, you may have assumed this process for message consumption:
+
+- Fetch a message from the queue (across the network, which can be slow)
+- Process the message
+- Acknowledge the message
+- Repeat
+
+But that would slow everything down to a crawl due to the full network round trip for every message. Instead, RabbitMQ allows you to prefetch messages. When you prefetch messages, RabbitMQ will send you a batch of messages at once, the client library will store them in memory, and you can process them one by one. Much faster. The diagram shows 3 consumers each prefetching batches of 2.
+
+Example in go:
+
+```go
+// Set prefetch to control message flow
+err = ch.Qos(
+    10,    // prefetch count - max messages to deliver without ack
+    0,     // prefetch size - 0 means no size limit
+    false, // global - apply to entire connection
+)
+```
+
+**Quorum Queues**: Generally speaking, there are 2 queue types to worry about:
+
+- Classic queues (we've been using these)
+- Quorum queues
+
+- Classic queues are the default and are great for most use cases. They are fast and simple. However, they have a single point of failure: the node that the queue is on. If that node goes down, the queue is lost.
+
+You might be thinking, "Wait! You told me Rabbit is a distributed system!" And you're right, Rabbit is distributed, but classic queues are not. They are stored on a single node. If that node goes down, the queue is lost, at least until the node comes back online.
+
+- Quorum queues are designed to be more resilient. They are stored on multiple nodes, so if one node goes down, the queue is still available. The tradeoff is that because quorum queues are stored on multiple nodes, they are slower than classic queues.
+
+As a general rule, use classic queues for my ephemeral queues (transient, auto-delete, etc). I use quorum queues for most of my durable queues.
